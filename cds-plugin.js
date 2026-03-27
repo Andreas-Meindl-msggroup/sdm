@@ -2,5 +2,5 @@
  * Entry point for the plugin 
  */
 
-require("@cap-js/attachments");
+require("@msg-group/attachments");
 require('./lib/mtx/server');

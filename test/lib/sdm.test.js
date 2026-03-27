@@ -67,7 +67,7 @@ let {
   mimeTypeInvalidError
 } = require("../../lib/util/messageConsts");
 
-jest.mock("@cap-js/attachments/srv/basic", () => class {
+jest.mock("@msg-group/attachments/srv/basic", () => class {
   async init() {
     return Promise.resolve();
   }
