@@ -31,7 +31,7 @@
     "@sap/cds": ">=8"
   },
   "devDependencies": {
-    "@cap-js/sqlite": "^1",
+    "@cap-js/sqlite": "^2",
     "@eslint/js": "^9.4.0",
     "@sap/cds-dk": "^9",
     "eslint": "^9.4.0",
