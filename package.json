@@ -1,7 +1,7 @@
 {
   "name": "@msg-group/sdm",
   "description": "Fork for CAP plugin for effortless integration of CAP applications with SAP Document Management Service.",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "repository": "cap-js/sdm",
   "author": "SAP SE (https://www.sap.com)",
   "homepage": "https://cap.cloud.sap/",
