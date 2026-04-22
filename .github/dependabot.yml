@@ -6,7 +6,7 @@ updates:
       interval: "daily"
     open-pull-requests-limit: 10
     allow:
-      - dependency-name: "@msg-group/attachments"
+      - dependency-name: "@cap-js/attachments"
       - dependency-name: "@sap/cds"
       
   - package-ecosystem: "github-actions"

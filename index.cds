@@ -1,4 +1,4 @@
-using { sap.attachments.Attachments } from '@msg-group/attachments';
+using { sap.attachments.Attachments } from '@cap-js/attachments';
 extend aspect Attachments with {
     folderId : String @title: 'Folder ID' @readonly;
     repositoryId : String @title: 'Repository ID' @readonly default null;
