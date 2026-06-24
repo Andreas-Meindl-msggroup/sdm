@@ -130,8 +130,8 @@ class Api {
     async checkEntity(appUrl, serviceName, entityName, incidentID){
         //Checking to see if the entity exists
         try{
-            response = await axios.get(`
-                https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`,
+            let response = await axios.get(
+                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`,
                 this.config
             );
             incidentID = response.data.ID
@@ -319,6 +319,34 @@ class Api {
         }
     }
 
+    async fetchMetadataDraft(appUrl, serviceName, entityName, incidentID, attachment) {
+        let response;
+
+        try {
+            response = await axios.get(
+                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(up__ID=${incidentID},ID=${attachment},IsActiveEntity=false)`,
+                this.config
+            );
+
+            if (response.status === 200 && response.data) {
+                return {
+                    status: "OK",
+                    data: response.data
+                };
+            } else {
+                return {
+                    status: "FAILED",
+                    message: "Fetch metadata draft did not return 200 status code. Actual code: " + response.status
+                };
+            }
+        } catch (error) {
+            return {
+                status: "FAILED",
+                message: "Fetch metadata draft API call failed: " + error.message
+            };
+        }
+    }
+
     async updateAttachment(appUrl, serviceName, entityName, incidentID, updateData, attachment){
         let response;
          try{
@@ -464,6 +492,32 @@ class Api {
             return {
                 status: "FAILED",
                 message: "Get attachments list API call failed : " + error.message
+            };
+        }
+    }
+
+    async getActiveAttachmentsList(appUrl, serviceName, entityName, incidentID) {
+        let response;
+        try {
+            response = await axios.get(
+                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/references`,
+                this.config
+            );
+            if (response.status === 200 && response.data && response.data.value) {
+                return {
+                    status: "OK",
+                    attachments: response.data.value
+                };
+            } else {
+                return {
+                    status: "FAILED",
+                    message: "Get active attachments list did not return 200 status code : " + response.status
+                };
+            }
+        } catch (error) {
+            return {
+                status: "FAILED",
+                message: "Get active attachments list API call failed : " + error.message
             };
         }
     }
