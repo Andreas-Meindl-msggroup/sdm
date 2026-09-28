@@ -18,8 +18,8 @@ This plugin can be consumed by the CAP application deployed on BTP to store thei
 - Link as attachments: Provides the capability to support link or URL as attachments.
 - Edit Link-type attachments: Provides the capability to update URL of link-type attachments.
 - Non-Draft Attachments: Provides the capability to work with attachments in non-draft (active) entities.
-- Dynamic SDM Folder Paths: Provides the capability to organize attachments in custom nested folder structures within the SDM repository.
 - Technical user flow: Provides the capability to use technical user flow.
+- Dynamic SDM Folder Paths: Provides the capability to organize attachments in custom nested folder structures within the SDM repository.
 
 ### Table of Contents
 
@@ -30,9 +30,13 @@ This plugin can be consumed by the CAP application deployed on BTP to store thei
 - [Support for Link type attachments](#support-for-link-type-attachments)
 - [Support for Edit of Link type attachments](#support-for-edit-of-link-type-attachments)
 - [Support for Non-Draft Attachments](#support-for-non-draft-attachments)
-- [Support for Dynamic SDM Folder Paths](#support-for-dynamic-sdm-folder-paths)
+- [Support for Multiple attachment facets](#support-for-multiple-attachment-facets)
+- [Support for Large File Upload](#support-for-large-file-upload)
 - [Support for Technical User](#support-for-technical-user)
+- [Force Client Credentials Flow via Annotation](#force-client-credentials-flow-via-annotation)
+- [Support for Dynamic SDM Folder Paths](#support-for-dynamic-sdm-folder-paths)
 - [Support for Multitenancy](#support-for-multitenancy)
+- [Migration Notes](#migration-notes)
 - [Deploying and testing the application](#deploying-and-testing-the-application)
 - [Running the unit tests](#running-the-unit-tests)
 - [Known Restrictions](#known-restrictions)
@@ -632,6 +636,225 @@ service ProcessorService {
 }
 ```
 
+## Support for Multiple attachment facets
+
+The plugin supports creating multiple attachment facets or sections, each allowing various documents to be uploaded. The names of these facets are fully customizable. All existing operations available for the default attachment facet are also supported for any additional facets you create.
+
+Refer the following example from a sample Incidents Management app to configure multiple attachment facets.
+
+> **Note**
+>
+> This is an example of adding the `references` facet. You can add as many facets as needed by following the same pattern.
+
+### 1. Add facet entries in `annotations.cds` - [Example](https://github.com/cap-js/sdm/blob/develop/app/single-tenant/central-space/incidents-app/app/incidents/annotations.cds)
+
+Add `UI.ReferenceFacet` entries so each composition appears as a separate section on the object page.
+
+```cds
+{
+   $Type : 'UI.ReferenceFacet',
+   ID    : 'ReferencesFacet',
+   Label : 'References',
+   Target: 'references/@UI.LineItem',
+}
+```
+
+Add the following `references` annotation block in `annotations.cds`:
+
+```cds
+////////////////////////////////////////////////////////////////////////////
+//
+//  References Details
+//
+annotate service.Incidents.references with @UI: {
+   HeaderInfo: {
+            $Type         : 'UI.HeaderInfoType',
+            TypeName      : '{i18n>Attachment}',
+            TypeNamePlural: '{i18n>Attachments}',
+   },
+   LineItem  : [
+      {Value: type, @HTML5.CssDefaults: {width: '10%'}},
+      {Value: filename, @HTML5.CssDefaults: {width: '25%'}},
+      {Value: content, @HTML5.CssDefaults: {width: '0%'}},
+      {Value: createdAt, @HTML5.CssDefaults: {width: '20%'}},
+      {Value: createdBy, @HTML5.CssDefaults: {width: '20%'}},
+      {Value: note, @HTML5.CssDefaults: {width: '25%'}},
+      {
+         $Type  : 'UI.DataFieldForActionGroup',
+         ID     : 'TableActionGroup',
+         Label  : 'Create',
+         ![@UI.Hidden]: {$edmJson: {$Eq: [ {$Path: 'IsActiveEntity'}, true ]}},
+         Actions: [
+            {
+               $Type : 'UI.DataFieldForAction',
+               Label : 'Link',
+               Action: 'ProcessorService.createLink',
+            }
+         ]
+      },
+      {
+         @UI.Hidden: {$edmJson:{$If:[{$Eq:[{$Path: 'IsActiveEntity' },true]},true,{$If:[{$Ne:[{$Path:'mimeType'},'application/internet-shortcut']},true,false]}]}},
+         $Type : 'UI.DataFieldForAction',
+         Label : 'Edit Link',
+         Action: 'ProcessorService.editLink', // -> Ensure the service name is correct
+         Inline: true,
+         IconUrl: 'sap-icon://edit',
+         @HTML5.CssDefaults: {width: '4%'}
+      },
+   ]
+}
+{
+   url @readonly;
+   note @(title: '{i18n>Note}');
+   filename @(title: '{i18n>Filename}');
+   modifiedAt @(odata.etag: null);
+   content
+         @Core.ContentDisposition: { Filename: filename, Type: 'inline' }
+         @(title: '{i18n>Attachment}');
+   folderId @UI.Hidden;
+   mimeType @UI.Hidden;
+   status @UI.Hidden;
+   repositoryId @UI.Hidden;
+}
+
+annotate service.Incidents.references with {
+   customProperty1 @Common.ValueListWithFixedValues;
+}
+```
+
+### 2. Expose each facet as a projection with actions in `srv/service.cds` - [Example](https://github.com/cap-js/sdm/blob/develop/app/single-tenant/central-space/incidents-app/srv/service.cds)
+
+Each facet must be projected and action-enabled, for example:
+
+```cds
+entity Incidents.references as projection on my.Incidents.references
+actions {
+   @(Common.SideEffects : {TargetEntities: ['']},)
+   action createLink(
+      in:many $self,
+      @mandatory @Common.Label:'Name' name: String @UI.Placeholder: 'Enter a name for the link',
+      @mandatory @assert.format:'^(https?:\/\/)(([a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}|localhost)(:\d{2,5})?(\/[^\s]*)?$' @Common.Label:'URL' url: String @UI.Placeholder: 'Example: https://www.example.com'
+   );
+   action editLink(
+      @mandatory @assert.format:'^(https?:\/\/)(([a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}|localhost)(:\d{2,5})?(\/[^\s]*)?$'
+      @Common.Label:'URL' url: String @UI.Placeholder: 'Example: https://www.example.com'
+   );
+   action openAttachment() returns { value: String; };
+}
+```
+
+### 3. Add `controlConfiguration` entries in `manifest.json` - [Example](https://github.com/cap-js/sdm/blob/develop/app/single-tenant/central-space/incidents-app/app/incidents/webapp/manifest.json)
+
+For row-press behavior in every facet table, configure each line item target:
+
+```json
+"controlConfiguration": {
+   "references/@com.sap.vocabularies.UI.v1.LineItem": {
+      "tableSettings": {
+         "type": "ResponsiveTable",
+         "selectionMode": "Auto",
+         "rowPress": ".extension.ns.incidents.controller.custom.onRowPress"
+      }
+   }
+}
+```
+
+## Support for Large File Upload
+
+This plugin supports uploading files larger than 400 MB to SAP Document Management (SDM) without buffering the entire file in memory. The plugin automatically detects file size and routes the upload through either the single-POST path or a chunked path. Clients use the same OData `PUT .../content` request regardless of file size.
+
+### Key Features
+
+- **Automatic Routing**: Files ≤ 400 MB use the existing single-POST path; files > 400 MB use a chunked upload path
+- **Streaming Upload**: Files > 400 MB are streamed in 20 MB chunks via CMIS `appendContentStream`, avoiding out-of-memory errors
+- **Read-Ahead Buffering**: Up to 4 chunks (80 MB max) are pre-loaded while the previous chunk is uploading, improving throughput
+- **Failure Recovery**: In-progress upload IDs are tracked in an orphan queue; incomplete documents are deleted with exponential-backoff retries on failure
+- **Client Disconnect Handling**: Partial uploads are cleanly cleaned up if the OData client drops the connection mid-upload
+- **Virus Scan Guard**: For repositories with virus scanning enabled, files > 400 MB are rejected upfront with HTTP 409 since SDM's virus scan service does not support files above this size
+
+### How It Works
+
+For attachment uploads via OData `PUT .../content`, the plugin automatically:
+
+1. **Detects file size** from the HTTP `Content-Length` header before any data is streamed
+2. **Routes small files (≤ 400 MB)** through the existing single-POST `createDocument` path — no change in behavior
+3. **Routes large files (> 400 MB)** through the chunked path:
+   - Creates an empty placeholder document in SDM via `createDocument`
+   - Streams the file in 20 MB chunks via `appendContentStream`, with the last chunk marked `isLastChunk=true`
+   - Pre-loads up to 4 chunks in a read-ahead buffer while the previous chunk uploads
+4. **Tracks orphans on failure**: if any chunk upload fails, the placeholder objectId is added to an orphan queue and the plugin attempts to delete the incomplete document with retry backoff
+5. **Reconciles on restart**: any orphan queue entry that survived a previous failure is cleaned up by the startup reconciliation job
+
+### Configuration
+
+No client-side or CDS-side configuration is required. The thresholds are constants in the plugin:
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `FILE_SIZE_THRESHOLD` | 400 MB | Boundary between single-POST and chunked upload paths |
+| `CHUNK_SIZE` | 20 MB | Size of each `appendContentStream` chunk |
+
+### Virus Scan Repositories
+
+SAP Document Management's virus-scan service does not support files above 400 MB. When `isVirusScanEnabled: true` is set on the SDM service binding, the plugin rejects uploads larger than 400 MB with HTTP 409 and a descriptive error message before any data is streamed, instead of letting the request fail later at the SDM side. Repositories without virus scanning are unaffected.
+
+
+## Support for Technical User
+The CAP OData operations can be performed on attachments using a technical user. This flow can be used for machine-to-machine (M2M) interactions, where user involvement is not necessary.
+
+A leading CAP application's service should add the requires with annotation "system-user". For more detailed information on "system-user" within the SAP CAP framework, [Capire documentation](https://cap.cloud.sap/docs/guides/security/authorization#pseudo-roles). Here is an [example](https://github.com/cap-js/incidents-app/blob/sdmIncidents/srv/service.cds) from a sample Incident app demonstrating the implementation.
+```cds
+service ProcessorService @(requires:['support','system-user']) {
+entity Incidents as projection on my.Incidents;
+}
+```
+
+## Force Client Credentials Flow via Annotation
+
+By default, the plugin uses the JWT-bearer flow when a user context is present in the incoming token (named-user authentication), and falls back to client-credentials only for technical users that have no user origin. Some scenarios — for example, customer requirements where end users do not have SDM roles but the application still needs to upload, rename, edit links, and update attachment metadata on their behalf — need the client-credentials flow regardless of whether the token carries a user context.
+
+The `@SDM.useClientCredential: true` annotation on an attachments composition opts that composition into the client-credentials flow for all CRUD operations, irrespective of the calling user.
+
+### Key Features
+
+- **Per-Composition Scope**: A parent entity can mix flows — one attachment composition using client-credentials, another using the default JWT-bearer flow
+- **Flow Override on All CRUD Paths**: Create, upload, rename, edit links, update metadata, and delete are all routed through the technical user when the annotation is set
+- **Aligned `createdBy` / `modifiedBy`**: The plugin DB columns are stamped with the SDM client_id so the UI matches `cmis:createdBy` / `cmis:modifiedBy` recorded by DMS / DI
+- **Default Preserved**: Without the annotation, existing behavior is unchanged — JWT-bearer when a user context is present, client-credentials only as a fallback
+
+### How It Works
+
+For an attachments composition annotated with `@SDM.useClientCredential: true`, the plugin:
+
+1. **Detects the annotation** on the composition target via `req.target` for direct attachment operations, and via composition walking on parent SAVE events
+2. **Authenticates every SDM call** with the SDM service binding's `clientid` / `clientsecret` (resolved from `VCAP_SERVICES`)
+3. **Stamps `createdBy` / `modifiedBy`** with the same `clientid` on freshly activated draft rows so the plugin DB and the SDM backend show identical principals
+
+### Entity Definition
+
+The annotation must live on the attachments **target** (the composition target entity). In the sample Incidents app, the `footnotes` composition is annotated so footnote attachments are always uploaded under the technical user, while the human-user-authored `references` composition keeps the default flow:
+
+```cds
+using { sap.attachments.Attachments } from '@cap-js/sdm';
+
+service ProcessorService {
+  entity Incidents as projection on my.Incidents;
+}
+
+// References — created by the human end-user (default flow)
+extend my.Incidents with {
+  references : Composition of many Attachments;
+  footnotes  : Composition of many Attachments;
+}
+
+// Footnotes — always stored under the SDM technical user
+annotate my.Incidents.footnotes with @SDM.useClientCredential: true;
+```
+
+### Configuration
+
+The SDM service binding must be available in `VCAP_SERVICES` so the plugin can resolve the client credentials. This is the normal binding setup; no extra configuration is required.
+
 ## Support for Dynamic SDM Folder Paths
 
 This plugin provides advanced folder management capabilities, allowing you to organize attachments in custom nested folder structures within the SDM repository. Instead of using the default entity-based folder structure, you can specify dynamic paths to organize attachments hierarchically based on your business logic.
@@ -735,6 +958,47 @@ Refer the following example from a sample Incidents Management app which demonst
    ```
 
 When the application is deployed as a SaaS application with above code, a repository is onboarded automatically when a tenant subscribes the SaaS application. The same repository is deleted when the tenant unsubscribes from the SaaS application. The necessary params for the Repository onboarding can be found in the [documentation](https://help.sap.com/docs/document-management-service/sap-document-management-service/internal-repository).
+
+## Migration Notes
+
+### Migration: Enabling HDI auto-undeploy
+
+Starting with @cap-js/attachments 3.13.2, the `ScanStates` code-list translations are shipped as a single consolidated table-import file (loading all locales via a `locale` column) instead of one file per locale. When you **redeploy an existing application** that was previously deployed with attachments 3.13.1 or earlier, the old per-locale import files remain in the HDI container and collide with the new consolidated file, causing the database deployment to fail:
+
+```
+HDI make failed (... errors ...)
+com.sap.hana.di.tabledata: The "include_filter" definitions in the table import
+files "...ScanStates_texts_<lang>.hdbtabledata" and "...ScanStates_texts.hdbtabledata"
+use key values that are not disjunct ...
+```
+
+To let HDI remove the obsolete artifacts automatically on redeploy, enable `auto_undeploy` in your application.
+
+**Single-tenant applications** — add `HDI_DEPLOY_OPTIONS` to the `hdb` deployer module in `mta.yaml`:
+
+```yaml
+- name: <your-db-deployer>
+  type: hdb
+  path: gen/db
+  requires:
+    - name: <your-hdi-container>
+  parameters:
+    buildpack: nodejs_buildpack
+  properties:
+    HDI_DEPLOY_OPTIONS: '{"auto_undeploy":true}'
+```
+
+**Multitenant applications** — tenant databases are updated via `cds-mtx upgrade`, so set `HDI_DEPLOY_OPTIONS` on the mtx sidecar module in `mta.yaml`:
+
+```yaml
+- name: <your-mtx-sidecar>
+  type: nodejs
+  path: gen/mtx/sidecar
+  properties:
+    HDI_DEPLOY_OPTIONS: '{"auto_undeploy":true}'
+```
+
+> **Note:** `HDI_DEPLOY_OPTIONS` takes a JSON object; the `--auto-undeploy` CLI flag maps to the `auto_undeploy` key. Enabling auto-undeploy only removes design-time artifacts that the current build no longer generates (here, the obsolete code-list import definitions, which the new version re-imports). It does not delete your attachment records or business data. Because it applies to the whole container, HDI will also remove any other artifact dropped from the model on future deploys — this is standard HDI behavior.
 
 ## Deploying and testing the application
 

@@ -3,578 +3,537 @@ const fs = require('fs');
 const FormData = require('form-data');
 
 class Api {
-    constructor(config) {
-        config = JSON.parse(JSON.stringify(config));
-        this.config = config
+  constructor(config) {
+    config = JSON.parse(JSON.stringify(config));
+    this.config = config;
+  }
+
+  getActiveFacet() {
+    return process.env.SDM_TEST_FACET || 'references';
+  }
+
+  async createEntityDraft(appUrl, serviceName, entityName) {
+    let response;
+    let incidentID;
+    //Creating the entity (draft)
+    try {
+      response = await axios.post(
+        `https://${appUrl}/odata/v4/${serviceName}/${entityName}`,
+        {
+          title: 'IntegrationTestEntity',
+          status_code: 'N',
+        },
+        this.config
+      );
+
+      incidentID = response.data.ID;
+      if (response.status === 201 && response.statusText === 'Created') {
+        return {
+          status: 'OK',
+          incidentID: incidentID,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Create entity draft did not return 201 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Create entity draft API call failed : ' + error.message,
+      };
+    }
+  }
+
+  async saveEntityDraft(appUrl, serviceName, entityName, srvpath, incidentID, treatWarningsAsErrors = false) {
+    //Saving the entity (draft)
+    let response;
+    try {
+      response = await axios.post(
+        `
+                https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${srvpath}.draftActivate`,
+        {},
+        this.config
+      );
+      let sapMessages = '';
+      sapMessages = response.headers['sap-messages'];
+
+      if (response.status === 201 || response.status === 200) {
+        if (sapMessages) {
+          try {
+            const messages = JSON.parse(sapMessages);
+            const severityThreshold = treatWarningsAsErrors ? 3 : 4;
+            const errorMessages = messages.filter((msg) => (msg.severity && msg.severity >= severityThreshold) || (msg.numericSeverity && msg.numericSeverity >= severityThreshold));
+            if (errorMessages.length > 0) {
+              return {
+                status: 'FAILED',
+                message: errorMessages[0].message || errorMessages[0].details || 'Validation error occurred',
+              };
+            }
+          } catch {
+            // Parse error - ignore
+          }
+        }
+        return {
+          status: 'OK',
+          sapMessages: sapMessages,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Save entity draft did not return 200/201 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      if (error.response?.data?.error?.message) {
+        return {
+          status: 'FAILED',
+          message: error.response.data.error.message,
+        };
       }
 
-    async createEntityDraft(appUrl, serviceName, entityName){
-        let response;
-        let incidentID;
-        //Creating the entity (draft)
-        try{
-            response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}`,
-                {
-                title: 'IntegrationTestEntity',
-                status_code: 'N'
-                },
-                this.config
-            )
-
-            incidentID = response.data.ID
-            if (response.status === 201 && response.statusText === 'Created') {
-                return {
-                    status: "OK",
-                    incidentID: incidentID
-                };
-            }
-            else {
-                return {
-                    status: "FAILED" ,
-                    message: "Create entity draft did not return 201 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Create entity draft API call failed : " + error.message
-            };
-        }
-
+      return {
+        status: 'FAILED',
+        message: 'Save entity draft API call failed : ' + error.message,
+      };
     }
+  }
 
-    async saveEntityDraft(appUrl, serviceName, entityName, srvpath, incidentID, treatWarningsAsErrors = false){
-        //Saving the entity (draft)
-        let response;
-        try{
-            response = await axios.post(`
-                https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${srvpath}.draftActivate`,
-                {},
-                this.config
-            );
-            let sapMessages = "";
-            sapMessages = response.headers['sap-messages'];
-            
-            if (response.status === 201 || response.status === 200) {
-                if (sapMessages) {
-                    try {
-                        const messages = JSON.parse(sapMessages);
-                        const severityThreshold = treatWarningsAsErrors ? 3 : 4;
-                        const errorMessages = messages.filter(msg => 
-                            (msg.severity && msg.severity >= severityThreshold) || 
-                            (msg.numericSeverity && msg.numericSeverity >= severityThreshold)
-                        );
-                        if (errorMessages.length > 0) {
-                            return {
-                                status: "FAILED",
-                                message: errorMessages[0].message || errorMessages[0].details || "Validation error occurred"
-                            };
-                        }
-                    } catch {
-                        // Parse error - ignore
-                    }
-                }
-                return {
-                    status: "OK",
-                    sapMessages: sapMessages
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Save entity draft did not return 200/201 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            if (error.response?.data?.error?.message) {
-                return {
-                    status: "FAILED",
-                    message: error.response.data.error.message
-                };
-            }
-            
-            return {
-                status: "FAILED",
-                message: "Save entity draft API call failed : " + error.message
-            };
-        }
+  async editEntity(appUrl, serviceName, entityName, incidentID, srvpath) {
+    try {
+      let response = await axios.post(
+        `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${srvpath}.draftEdit`,
+        {
+          PreserveChanges: true,
+        },
+        this.config
+      );
+      if (response.status === 201 && response.data) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Edit entity draft did not return 201 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Edit entity draft API call failed : ' + error.message,
+      };
     }
+  }
 
-    async editEntity(appUrl, serviceName, entityName, incidentID, srvpath){
-        try{
-            let response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${srvpath}.draftEdit`,
-                {
-                PreserveChanges: true,
-                },
-                this.config
-            );
-            if (response.status === 201 && response.data) {
-                return {
-                    status: "OK",
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Edit entity draft did not return 201 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Edit entity draft API call failed : " + error.message
-            };
-        }
+  async checkEntity(appUrl, serviceName, entityName, incidentID) {
+    //Checking to see if the entity exists
+    try {
+      let response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`, this.config);
+      incidentID = response.data.ID;
+
+      if (response.status === 200) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Check entity draft did not return 200 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Check entity draft API call failed : ' + error.message,
+      };
     }
+  }
 
-    async checkEntity(appUrl, serviceName, entityName, incidentID){
-        //Checking to see if the entity exists
-        try{
-            let response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`,
-                this.config
-            );
-            incidentID = response.data.ID
-
-            if (response.status === 200) {
-                return {
-                    status: "OK"
-                };
-            }
-            else {
-                return {
-                    status: "FAILED",
-                    message: "Check entity draft did not return 200 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Check entity draft API call failed : " + error.message
-            };
-        }
-
+  async deleteEntity(appUrl, serviceName, entityName, incidentID) {
+    let response;
+    try {
+      response = await axios.delete(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`, this.config);
+      if (response.status == 204) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Delete entity draft did not return 204 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Delete entity draft API call failed : ' + error.message,
+      };
     }
+  }
 
-    async deleteEntity(appUrl, serviceName, entityName, incidentID){
-        let response;
-        try{
-            response = await axios.delete(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)`,
-                this.config
-            )
-            if(response.status == 204){
-                return {
-                    status: "OK",
-                };
-            }
-            else{
-                return {
-                    status: "FAILED",
-                    message: "Delete entity draft did not return 204 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Delete entity draft API call failed : " + error.message
-            };
-        }
+  async discardDraft(appUrl, serviceName, entityName, incidentID) {
+    let response;
+    try {
+      // Discard draft by deleting the entity with IsActiveEntity=false
+      response = await axios.delete(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)`, this.config);
+      if (response.status == 204) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Discard draft did not return 204 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Discard draft API call failed : ' + error.message,
+      };
     }
+  }
 
-    async discardDraft(appUrl, serviceName, entityName, incidentID){
-        let response;
-        try{
-            // Discard draft by deleting the entity with IsActiveEntity=false
-            response = await axios.delete(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)`,
-                this.config
-            )
-            if(response.status == 204){
-                return {
-                    status: "OK",
-                };
-            }
-            else{
-                return {
-                    status: "FAILED",
-                    message: "Discard draft did not return 204 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Discard draft API call failed : " + error.message
-            };
-        }
-    }
+  async createAttachment(appUrl, serviceName, entityName, incidentID, postData, file) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    postData['filename'] = file.filename;
 
-    async createAttachment(appUrl, serviceName, entityName, incidentID, postData, file){
-        let response;
-        postData['filename'] = file.filename;
-
-        try{
-            response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references`,
-                postData,
-                this.config
-            )
-            if (response.data && response.data.ID) {
-                const formDataPut = new FormData();
-                const pdfStream = fs.createReadStream(file.filepath);
-                formDataPut.append('content', pdfStream);
-                // responseStatus.attachmentID.push(response.data.ID)
-                 try{
-                    await axios.put(
-                     `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(ID=${response.data.ID},IsActiveEntity=false)/content`,
-
-                    formDataPut,
-                    this.config
-                    );
-
-                    if (response.status === 201) {
-                        return {
-                            status: "OK",
-                            ID: response.data.ID
-                        }
-                    } else {
-                        return {
-                            status: "FAILED",
-                            message: "Create attachment (put) did not return 201 status code. Actual code : " + response.status
-                        };
-                    }
-                }
-                catch (error) {
-                    return {
-                        status: "FAILED",
-                        message: "Create attachment API call (put) failed : " + error.message,
-                        ID: response.data.ID
-                    };
-                }
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Create attachment (post) did not return a valid response"
-                };
-            }
-        }
-        catch (error){
-            return {
-                status: "FAILED",
-                message: "Create attachment API call failed : " + error.message
-            };
-        }
-    }
-
-    async readAttachment(appUrl, serviceName, entityName, incidentID, attachment){
-        try{
-            let response;
-            response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/references(up__ID=${incidentID},ID=${attachment},IsActiveEntity=true)/content`,
-                this.config
-            );
-            if (response.status === 200 && response.data) {
-                return {
-                    status: "OK"
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Read attachment did not return 200 status code. Actual code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Read attachment API call failed : " + error.message
-            };
-        }
-    }
-
-    async fetchMetadata(appUrl, serviceName, entityName, incidentID, attachment) {
-        let response;
-
+    try {
+      response = await axios.post(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}`, postData, this.config);
+      if (response.data && response.data.ID) {
+        const formDataPut = new FormData();
+        const pdfStream = fs.createReadStream(file.filepath);
+        formDataPut.append('content', pdfStream);
+        // responseStatus.attachmentID.push(response.data.ID)
         try {
-            response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/references(up__ID=${incidentID},ID=${attachment},IsActiveEntity=true)`,
-                this.config
-            );
+          await axios.put(
+            `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(ID=${response.data.ID},IsActiveEntity=false)/content`,
 
-            if (response.status === 200 && response.data) {
-                return {
-                    status: "OK",
-                    data: response.data
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Fetch metadata did not return 200 status code. Actual code: " + response.status
-                };
-            }
-        } catch (error) {
+            formDataPut,
+            this.config
+          );
+
+          if (response.status === 201) {
             return {
-                status: "FAILED",
-                message: "Fetch metadata API call failed: " + error.message
+              status: 'OK',
+              ID: response.data.ID,
             };
-        }
-    }
-
-    async fetchMetadataDraft(appUrl, serviceName, entityName, incidentID, attachment) {
-        let response;
-
-        try {
-            response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(up__ID=${incidentID},ID=${attachment},IsActiveEntity=false)`,
-                this.config
-            );
-
-            if (response.status === 200 && response.data) {
-                return {
-                    status: "OK",
-                    data: response.data
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Fetch metadata draft did not return 200 status code. Actual code: " + response.status
-                };
-            }
-        } catch (error) {
+          } else {
             return {
-                status: "FAILED",
-                message: "Fetch metadata draft API call failed: " + error.message
+              status: 'FAILED',
+              message: 'Create attachment (put) did not return 201 status code. Actual code : ' + response.status,
             };
-        }
-    }
-
-    async updateAttachment(appUrl, serviceName, entityName, incidentID, updateData, attachment){
-        let response;
-         try{
-            response = await axios.patch(
-               `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(ID=${attachment},IsActiveEntity=false)`,
-                updateData,
-                this.config
-            );
-            if (response.status === 200) {
-                return {
-                    status: "OK"
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Update attachment did not return 200 status code : " + response.status
-                };
-            }
+          }
         } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Update attachment API call failed : " + error.message
-            };
+          return {
+            status: 'FAILED',
+            message: 'Create attachment API call (put) failed : ' + error.message,
+            ID: response.data.ID,
+          };
         }
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Create attachment (post) did not return a valid response',
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Create attachment API call failed : ' + error.message,
+      };
     }
+  }
 
-    async deleteAttachment(appUrl, serviceName, incidentID, attachment,entityName){
-        let response;
-        try{
-            response = await axios.delete(
-                 `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(ID=${attachment},IsActiveEntity=false)`,
-                this.config
-            );
-            if (response.status === 204) {
-                return {
-                    status: "OK"
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Delete attachment did not return 204 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Delete attachment API call failed : " + error.message
-            };
-        }
+  async readAttachment(appUrl, serviceName, entityName, incidentID, attachment) {
+    const activeFacet = this.getActiveFacet();
+    try {
+      let response;
+      response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${activeFacet}(up__ID=${incidentID},ID=${attachment},IsActiveEntity=true)/content`, this.config);
+      if (response.status === 200 && response.data) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Read attachment did not return 200 status code. Actual code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Read attachment API call failed : ' + error.message,
+      };
     }
+  }
 
-    async createLink(appUrl, serviceName, entityName, incidentID, srvpath, name, url) {
-        let response;
-        try {
-            const linkData = {
-                name: name,
-                url: url
-            };
-            
-            response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references/${srvpath}.createLink`,
-                linkData,
-                this.config
-            )
-            
-            if (response.status === 204) {
-                return {
-                    status: "OK"
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Create link did not return 204 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            // Extract server error message if available
-            let errorMessage = "Create Link API call failed : " + error.message;
-            if (error.response && error.response.data && error.response.data.error && error.response.data.error.message) {
-                errorMessage = error.response.data.error.message;
-            }
-            return {
-                status: "FAILED",
-                message: errorMessage
-            };
-        }
+  async fetchMetadata(appUrl, serviceName, entityName, incidentID, attachment) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+
+    try {
+      response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${activeFacet}(up__ID=${incidentID},ID=${attachment},IsActiveEntity=true)`, this.config);
+
+      if (response.status === 200 && response.data) {
+        return {
+          status: 'OK',
+          data: response.data,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Fetch metadata did not return 200 status code. Actual code: ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Fetch metadata API call failed: ' + error.message,
+      };
     }
+  }
 
-    async editLink(appUrl, serviceName, entityName, incidentID, linkID, srvpath, url) {
-        let response;
-        try {
-            const linkData = {
-                url: url
-            };
+  async fetchMetadataDraft(appUrl, serviceName, entityName, incidentID, attachment) {
+    let response;
+    const activeFacet = this.getActiveFacet();
 
-            // Construct OData editLink URL
-            const requestUrl = `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(up__ID=${incidentID},ID=${linkID},IsActiveEntity=false)/${srvpath}.editLink`;
+    try {
+      response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(up__ID=${incidentID},ID=${attachment},IsActiveEntity=false)`, this.config);
 
-            response = await axios.post(requestUrl, linkData, this.config);
-
-            if (response.status === 204) {
-                return {
-                    status: "OK"
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Edit link did not return 204 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            // Extract server error message if available
-            let errorMessage = "Edit Link API call failed : " + error.message;
-            if (error.response && error.response.data && error.response.data.error && error.response.data.error.message) {
-                errorMessage = error.response.data.error.message;
-            }
-            return {
-                status: "FAILED",
-                message: errorMessage
-            };
-        }
+      if (response.status === 200 && response.data) {
+        return {
+          status: 'OK',
+          data: response.data,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Fetch metadata draft did not return 200 status code. Actual code: ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Fetch metadata draft API call failed: ' + error.message,
+      };
     }
+  }
 
-    async getAttachmentsList(appUrl, serviceName, entityName, incidentID) {
-        let response;
-        try {
-            response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references`,
-                this.config
-            );
-            if (response.status === 200 && response.data && response.data.value) {
-                return {
-                    status: "OK",
-                    attachments: response.data.value
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Get attachments list did not return 200 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Get attachments list API call failed : " + error.message
-            };
-        }
+  async updateAttachment(appUrl, serviceName, entityName, incidentID, updateData, attachment) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.patch(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(ID=${attachment},IsActiveEntity=false)`, updateData, this.config);
+      if (response.status === 200) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Update attachment did not return 200 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Update attachment API call failed : ' + error.message,
+      };
     }
+  }
 
-    async getActiveAttachmentsList(appUrl, serviceName, entityName, incidentID) {
-        let response;
-        try {
-            response = await axios.get(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/references`,
-                this.config
-            );
-            if (response.status === 200 && response.data && response.data.value) {
-                return {
-                    status: "OK",
-                    attachments: response.data.value
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Get active attachments list did not return 200 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Get active attachments list API call failed : " + error.message
-            };
-        }
+  async deleteAttachment(appUrl, serviceName, incidentID, attachment, entityName) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.delete(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(ID=${attachment},IsActiveEntity=false)`, this.config);
+      if (response.status === 204) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Delete attachment did not return 204 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Delete attachment API call failed : ' + error.message,
+      };
     }
+  }
 
-    async openAttachment(appUrl, serviceName, entityName, incidentID, srvpath, attachment) {
-        let response;
-        try {
-            response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/references(ID=${attachment},IsActiveEntity=false)/${srvpath}.openAttachment`,
-                {},
-                this.config
-            )
-            if (response.status === 200) {
-                return {
-                    status: "OK",
-                    data: response.data
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Open attachment did not return 200 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Open attachment API call failed : " + error.message
-            };
-        }
-    }
+  async createLink(appUrl, serviceName, entityName, incidentID, srvpath, name, url) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      const linkData = {
+        name: name,
+        url: url,
+      };
 
-    async openAttachmentSaved(appUrl, serviceName, entityName, incidentID, srvpath, attachment) {
-        let response;
-        try {
-            response = await axios.post(
-                `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/references(ID=${attachment},IsActiveEntity=true)/${srvpath}.openAttachment`,
-                {},
-                this.config
-            )
-            if (response.status === 200) {
-                return {
-                    status: "OK",
-                    data: response.data
-                };
-            } else {
-                return {
-                    status: "FAILED",
-                    message: "Open attachment saved did not return 200 status code : " + response.status
-                };
-            }
-        } catch (error) {
-            return {
-                status: "FAILED",
-                message: "Open attachment saved API call failed : " + error.message
-            };
-        }
+      response = await axios.post(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}/${srvpath}.createLink`, linkData, this.config);
+
+      if (response.status === 204) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Create link did not return 204 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      // Extract server error message if available
+      let errorMessage = 'Create Link API call failed : ' + error.message;
+      if (error.response && error.response.data && error.response.data.error && error.response.data.error.message) {
+        errorMessage = error.response.data.error.message;
+      }
+      return {
+        status: 'FAILED',
+        message: errorMessage,
+      };
     }
+  }
+
+  async editLink(appUrl, serviceName, entityName, incidentID, linkID, srvpath, url) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      const linkData = {
+        url: url,
+      };
+
+      // Construct OData editLink URL
+      const requestUrl = `https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(up__ID=${incidentID},ID=${linkID},IsActiveEntity=false)/${srvpath}.editLink`;
+
+      response = await axios.post(requestUrl, linkData, this.config);
+
+      if (response.status === 204) {
+        return {
+          status: 'OK',
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Edit link did not return 204 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      // Extract server error message if available
+      let errorMessage = 'Edit Link API call failed : ' + error.message;
+      if (error.response && error.response.data && error.response.data.error && error.response.data.error.message) {
+        errorMessage = error.response.data.error.message;
+      }
+      return {
+        status: 'FAILED',
+        message: errorMessage,
+      };
+    }
+  }
+
+  async getAttachmentsList(appUrl, serviceName, entityName, incidentID) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}`, this.config);
+      if (response.status === 200 && response.data && response.data.value) {
+        return {
+          status: 'OK',
+          attachments: response.data.value,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Get attachments list did not return 200 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Get attachments list API call failed : ' + error.message,
+      };
+    }
+  }
+
+  async getActiveAttachmentsList(appUrl, serviceName, entityName, incidentID) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.get(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${activeFacet}`, this.config);
+      if (response.status === 200 && response.data && response.data.value) {
+        return {
+          status: 'OK',
+          attachments: response.data.value,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Get active attachments list did not return 200 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Get active attachments list API call failed : ' + error.message,
+      };
+    }
+  }
+
+  async openAttachment(appUrl, serviceName, entityName, incidentID, srvpath, attachment) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.post(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=false)/${activeFacet}(ID=${attachment},IsActiveEntity=false)/${srvpath}.openAttachment`, {}, this.config);
+      if (response.status === 200) {
+        return {
+          status: 'OK',
+          data: response.data,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Open attachment did not return 200 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Open attachment API call failed : ' + error.message,
+      };
+    }
+  }
+
+  async openAttachmentSaved(appUrl, serviceName, entityName, incidentID, srvpath, attachment) {
+    let response;
+    const activeFacet = this.getActiveFacet();
+    try {
+      response = await axios.post(`https://${appUrl}/odata/v4/${serviceName}/${entityName}(ID=${incidentID},IsActiveEntity=true)/${activeFacet}(ID=${attachment},IsActiveEntity=true)/${srvpath}.openAttachment`, {}, this.config);
+      if (response.status === 200) {
+        return {
+          status: 'OK',
+          data: response.data,
+        };
+      } else {
+        return {
+          status: 'FAILED',
+          message: 'Open attachment saved did not return 200 status code : ' + response.status,
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: 'Open attachment saved API call failed : ' + error.message,
+      };
+    }
+  }
 }
 
 module.exports = Api;

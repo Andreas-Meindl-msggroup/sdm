@@ -11,7 +11,8 @@ const {
   getUpdatedSecondaryProperties,
   extractSecondaryTypeIds,
   checkMCM,
-  prepareSecondaryProperties
+  prepareSecondaryProperties,
+  getContentLength,
 } = require("../../../lib/util/index");
 
 const cds = require("@sap/cds");
@@ -22,7 +23,20 @@ jest.mock("../../../lib/persistence", () => ({
 }));
 
 jest.mock("node-cache");
-jest.mock("@sap/cds");
+jest.mock("@sap/cds", () => {
+  const mockLogger = {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
+  return {
+    log: jest.fn(() => mockLogger),
+    env: { requires: {} },
+    context: null,
+    model: { definitions: {} },
+  };
+});
 jest.mock("@sap/xssec", () => ({
   v3: {
     requests: {
@@ -1217,6 +1231,144 @@ describe("util", () => {
         expect(result).toBeNull();
       });
     });
+
+    describe("getSdmClientId", () => {
+      const originalEnv = process.env.VCAP_SERVICES;
+
+      afterEach(() => {
+        if (originalEnv !== undefined) {
+          process.env.VCAP_SERVICES = originalEnv;
+        } else {
+          delete process.env.VCAP_SERVICES;
+        }
+      });
+
+      it("should extract clientid from SDM service binding's UAA credentials", () => {
+        process.env.VCAP_SERVICES = JSON.stringify({
+          sdm: [
+            {
+              name: "my-sdm",
+              credentials: { uaa: { clientid: "sb-clientid-xyz" } }
+            }
+          ]
+        });
+
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBe("sb-clientid-xyz");
+      });
+
+      it("should return null when sdm service is missing", () => {
+        process.env.VCAP_SERVICES = JSON.stringify({ other: [] });
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBeNull();
+      });
+
+      it("should return null when uaa.clientid is missing", () => {
+        process.env.VCAP_SERVICES = JSON.stringify({
+          sdm: [{ name: "my-sdm", credentials: { uaa: {} } }]
+        });
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBeNull();
+      });
+
+      it("should return null when VCAP_SERVICES is unset", () => {
+        delete process.env.VCAP_SERVICES;
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBeNull();
+      });
+
+      it("should return null on malformed VCAP_SERVICES", () => {
+        process.env.VCAP_SERVICES = "not-json";
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBeNull();
+      });
+
+      it("should re-parse VCAP_SERVICES when the env var changes (cache invalidation)", () => {
+        // Verifies that the VCAP cache keyed on the raw string invalidates
+        // correctly when the env var is reassigned — important for tests
+        // that swap VCAP_SERVICES between scenarios.
+        process.env.VCAP_SERVICES = JSON.stringify({
+          sdm: [{ name: "first", credentials: { uaa: { clientid: "first-id" } } }]
+        });
+        const { getSdmClientId } = require("../../../lib/util/index");
+        expect(getSdmClientId()).toBe("first-id");
+
+        // Reassign — the cache MUST invalidate
+        process.env.VCAP_SERVICES = JSON.stringify({
+          sdm: [{ name: "second", credentials: { uaa: { clientid: "second-id" } } }]
+        });
+        expect(getSdmClientId()).toBe("second-id");
+      });
+    });
+
+    describe("isClientCredentialForced", () => {
+      const ANNOT = '@SDM.useClientCredential';
+
+      beforeEach(() => {
+        cds.model = { definitions: {} };
+      });
+
+      it("should return true when explicit attachmentsEntity has the annotation", () => {
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        const entity = { [ANNOT]: true };
+        expect(isClientCredentialForced({}, entity)).toBe(true);
+      });
+
+      it("should return false when explicit attachmentsEntity lacks the annotation, even if a sibling has it", () => {
+        // Explicit entity wins — per-composition selection.
+        cds.model.definitions['Test.AnnotatedSibling'] = { [ANNOT]: true };
+        const req = {
+          target: {
+            elements: {
+              annotated: { type: 'cds.Composition', target: 'Test.AnnotatedSibling' }
+            }
+          }
+        };
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        const unannotatedEntity = {};
+        expect(isClientCredentialForced(req, unannotatedEntity)).toBe(false);
+      });
+
+      it("should return true when annotation is on req.target directly", () => {
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        const req = { target: { [ANNOT]: true } };
+        expect(isClientCredentialForced(req)).toBe(true);
+      });
+
+      it("should fall back to scanning composition targets on the parent", () => {
+        cds.model.definitions['Test.AnnotatedComp'] = { [ANNOT]: true };
+        cds.model.definitions['Test.PlainComp'] = {};
+        const req = {
+          target: {
+            elements: {
+              annotated: { type: 'cds.Composition', target: 'Test.AnnotatedComp' },
+              other: { type: 'cds.Composition', target: 'Test.PlainComp' }
+            }
+          }
+        };
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        expect(isClientCredentialForced(req)).toBe(true);
+      });
+
+      it("should return false when no annotation anywhere", () => {
+        cds.model.definitions['Test.PlainOnly'] = {};
+        const req = {
+          target: {
+            elements: {
+              other: { type: 'cds.Composition', target: 'Test.PlainOnly' }
+            }
+          }
+        };
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        expect(isClientCredentialForced(req)).toBe(false);
+      });
+
+      it("should return false when req.target has no elements", () => {
+        const { isClientCredentialForced } = require("../../../lib/util/index");
+        expect(isClientCredentialForced({ target: {} })).toBe(false);
+        expect(isClientCredentialForced({})).toBe(false);
+      });
+    });
   });
 
   describe("getPropertyTitles edge cases", () => {
@@ -1448,7 +1600,7 @@ describe("util", () => {
     it("should return false for non-pwconly repoType", () => {
       // Set up proper cds.context
       cds.context = { user: { authInfo: { token: { payload: { ext_attr: { zdn: 'test-subdomain' } } } } } };
-      
+
       const repoInfo = {
         data: {
           repo123: {
@@ -1462,6 +1614,70 @@ describe("util", () => {
       const result = isRepositoryVersioned(repoInfo, "repo123");
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe("getContentLength", () => {
+    it("returns -1 for null/undefined content", () => {
+      expect(getContentLength(null)).toBe(-1);
+      expect(getContentLength(undefined)).toBe(-1);
+    });
+
+    it("returns buffer byte length for Buffer input", () => {
+      const buf = Buffer.from("hello");
+      expect(getContentLength(buf)).toBe(5);
+    });
+
+    it("returns readableLength for a stream with positive readableLength", () => {
+      const { Readable } = require("stream");
+      const stream = new Readable({ read() {} });
+      stream.push(Buffer.alloc(42));
+      expect(getContentLength(stream)).toBe(42);
+    });
+
+    it("returns size for objects with a numeric size property", () => {
+      expect(getContentLength({ size: 1024 })).toBe(1024);
+    });
+
+    it("returns -1 for a stream with readableLength of 0", () => {
+      const { Readable } = require("stream");
+      const stream = new Readable({ read() {} });
+      expect(getContentLength(stream)).toBe(-1);
+    });
+
+    it("returns -1 for an object without size or readableLength", () => {
+      expect(getContentLength({ foo: "bar" })).toBe(-1);
+    });
+  });
+
+  describe("messageConsts branch coverage", () => {
+    const { renameFileErr } = require("../../../lib/util/messageConsts");
+
+    it("renameFileErr returns delete-and-reupload message when statusCondition is \"don't\"", () => {
+      const result = renameFileErr(["file1.pdf"], "don't");
+      expect(result).toContain("Delete and upload the files again");
+      expect(result).toContain("file1.pdf");
+    });
+
+    it("renameFileErr returns already-exist message for other statusCondition", () => {
+      const result = renameFileErr(["file2.pdf"], "already");
+      expect(result).toContain("already exist");
+      expect(result).not.toContain("Delete and upload");
+    });
+
+    it("noSDMRolesErrorMessage uses sdmMissingRolesExceptionMsg for non-create operation", () => {
+      const consts = require("../../../lib/util/messageConsts");
+      const result = consts.noSDMRolesErrorMessage.call(consts, ["file.pdf"], "upload");
+      expect(result).toContain("upload");
+      expect(result).toContain("file.pdf");
+      expect(result).toContain(consts.sdmMissingRolesExceptionMsg);
+    });
+
+    it("noSDMRolesErrorMessage uses userNotAuthorisedError for create operation", () => {
+      const consts = require("../../../lib/util/messageConsts");
+      const result = consts.noSDMRolesErrorMessage.call(consts, ["file.pdf"], "create");
+      expect(result).toContain("create");
+      expect(result).toContain(consts.userNotAuthorisedError);
     });
   });
 });

@@ -5,7 +5,7 @@
     "type": "application",
     "i18n": "i18n/i18n.properties",
     "applicationVersion": {
-      "version": "${applicationVersion}"
+      "version": "0.0.2"
     },
     "title": "{{appTitle}}",
     "description": "{{appDescription}}",
@@ -164,11 +164,25 @@
                     }
                   }
                 },
+                "attachments/@com.sap.vocabularies.UI.v1.LineItem": {
+                  "tableSettings": {
+                    "type": "ResponsiveTable",
+                    "selectionMode": "Auto",
+                    "rowPress": ".extension.ns.incidents.controller.custom.onRowPress"
+                  }
+                },
                 "references/@com.sap.vocabularies.UI.v1.LineItem": {
                   "tableSettings": {
                       "type": "ResponsiveTable",
                       "selectionMode": "Auto",
                       "rowPress": ".extension.ns.incidents.controller.custom.onRowPress"
+                  }
+                },
+                "footnotes/@com.sap.vocabularies.UI.v1.LineItem": {
+                  "tableSettings": {
+                    "type": "ResponsiveTable",
+                    "selectionMode": "Auto",
+                    "rowPress": ".extension.ns.incidents.controller.custom.onRowPress"
                   }
                 }
               }

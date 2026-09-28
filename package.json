@@ -1,7 +1,7 @@
 {
   "name": "@msg-group/sdm",
   "description": "Fork for CAP plugin for effortless integration of CAP applications with SAP Document Management Service.",
-  "version": "1.0.12",
+  "version": "1.11.0",
   "repository": "cap-js/sdm",
   "author": "SAP SE (https://www.sap.com)",
   "homepage": "https://cap.cloud.sap/",
@@ -20,7 +20,7 @@
     "plugin"
   ],
   "dependencies": {
-    "@cap-js/attachments": "^3",
+    "@cap-js/attachments": "3.13.3",
     "@sap-cloud-sdk/connectivity": "^4.3.1",
     "@sap-cloud-sdk/http-client": "^4.3.1",
     "@sap/xssec": "^4",
@@ -41,8 +41,10 @@
   },
   "scripts": {
     "start": "cds-serve",
-    "test": "jest --coverage --config jest.config.js",
-    "integration-test": "jest --config jest-integration.config.js",
+    "test": "jest --coverage --runInBand --config jest.config.js",
+    "integration-test": "jest --config jest-integration.config.js --runInBand && jest --config jest-integration-multifacet.config.js --runInBand && npm run --silent integration-test:done",
+    "integration-test:done": "echo \"All single-facet and multifacet integration tests passed\"",
+    "integration-test-multifacet": "jest --config jest-integration-multifacet.config.js",
     "integration-test-non-draft": "jest --config jest-integration-non-draft.config.js",
     "integration-test-subscription": "jest --config jest-integration-subscription.config.js",
     "integration-test-repo-specific": "jest --config jest-integration-repo-specific.config.js",
@@ -50,6 +52,11 @@
     "lint": "npx eslint --fix . --no-cache"
   },
   "cds": {
+    "server": {
+      "body_parser": {
+        "limit": "2gb"
+      }
+    },
     "requires": {
       "sdm": {
         "vcap": {

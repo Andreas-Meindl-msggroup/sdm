@@ -32,6 +32,31 @@ jobs:
         with:
           node-version: 20.x
 
+      - name: Setup npm registry and pin SAP tarballs
+        run: |
+          MTXS="${{ secrets.SAP_CDS_MTXS_TARBALL }}"
+          CDS_DK="${{ secrets.SAP_CDS_DK_TARBALL }}"
+          if [ -z "$CDS_DK" ]; then echo "ERROR: SAP_CDS_DK_TARBALL secret is not set"; exit 1; fi
+          TARBALL_HOST=$(printf '%s' "$CDS_DK" | sed -E 's#^https?://([^/]+)/.*#\1#')
+          # Global ~/.npmrc: @sap scope -> public npm, auth for the commons host so tarball downloads authenticate
+          {
+            printf '@sap:registry=https://registry.npmjs.org/\n'
+            printf '//%s/:_authToken=%s\n' "$TARBALL_HOST" '${{ secrets.NPM_AUTH_TOKEN }}'
+            printf 'legacy-peer-deps=true\n'
+          } > "$HOME/.npmrc"
+          # Pin internal-only packages to commons tarball URLs (guarded: only if the key already exists)
+          for pkg in \
+            "app/multi-tenant/central-space/cap-js-incidents-app/package.json" \
+            "app/multi-tenant/central-space/cap-js-incidents-app/mtx/sidecar/package.json"; do
+            [ -f "$pkg" ] || continue
+            tmp=$(mktemp)
+            jq --arg mtxs "$MTXS" --arg dk "$CDS_DK" '
+              (if .dependencies["@sap/cds-mtxs"] then .dependencies["@sap/cds-mtxs"] = $mtxs else . end)
+              | (if .devDependencies["@sap/cds-dk"] then .devDependencies["@sap/cds-dk"] = $dk else . end)
+              | (if $mtxs != "" then .overrides["@sap/cds-mtxs"] = $mtxs else . end)
+            ' "$pkg" > "$tmp" && mv "$tmp" "$pkg"
+          done
+
       - name: Login to Cloud Foundry
         run: |
           wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key \
@@ -41,7 +66,7 @@ jobs:
           sudo apt update
           sudo apt install cf8-cli
           cf login -a "$CF_API" -u "$CF_USER" -p "$CF_PASSWORD" -o "$CF_ORG" -s "$CF_SPACE"
-       
+
       - name: Prepare app & Build and deploy
         run: |
           npm pack
@@ -49,13 +74,14 @@ jobs:
           cd app/multi-tenant/central-space/cap-js-incidents-app
           npm i *.tgz
 
-      - name: Inject REPOSITORY_ID into mta.yaml
+      - name: Inject secrets into mta.yaml
         working-directory: app/multi-tenant/central-space/cap-js-incidents-app
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod a+x /usr/local/bin/yq
           yq -i e '(.modules[] | select(.name == "incidents-mtx-srv")).properties.REPOSITORY_ID = "${{ secrets.REPOSITORY_ID_MT }}"' mta.yaml
           yq -i e '(.modules[] | select(.name == "incidents-mtx-mtx")).requires[] |= (select(.name == "app-api").properties.REPOSITORY_ID = "${{ secrets.REPOSITORY_ID_MT }}")' mta.yaml
+          yq -i e '(.modules[] | select(.name == "incidents-mtx-mtx")).properties.DATABASE_ID = "${{ secrets.DATABASE_ID }}"' mta.yaml
 
       - name: Build and deploy
         working-directory: app/multi-tenant/central-space/cap-js-incidents-app
@@ -63,14 +89,14 @@ jobs:
           wget -P /tmp https://github.com/SAP/cloud-mta-build-tool/releases/download/v1.2.28/cloud-mta-build-tool_1.2.28_Linux_amd64.tar.gz
           tar -xvzf /tmp/cloud-mta-build-tool_1.2.28_Linux_amd64.tar.gz
           sudo mv mbt /usr/local/bin/
-          npm i @sap/cds-dk -g
+          npm i -g "${{ secrets.SAP_CDS_DK_TARBALL }}"
           mbt build
           cf install-plugin multiapps -f
           cf deploy mta_archives/capire.incidents.mtx_0.0.3.mtar -f
 
   integration-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     needs: deploy
     environment: dev
     env:
@@ -211,6 +237,9 @@ jobs:
               --arg cmisUrl "${{ env.CMIS_URL }}" \
               --arg cmisClientIDMT "${{ env.CMIS_CLIENT_ID_MT }}" \
               --arg cmisClientSecretMT "${{ env.CMIS_CLIENT_SECRET_MT }}" \
+              --arg defaultRepositoryIDMT "${{ secrets.DEFAULTREPOSITORYIDMT }}" \
+              --arg defaultRepositoryID "${{ secrets.DEFAULTREPOSITORYID }}" \
+              --arg virusScanRepositoryID "${{ secrets.VIRUSSCANREPOSITORYID }}" \
               '
               .username = $username
               | .password = $password
@@ -224,6 +253,9 @@ jobs:
               | .CMIS_URL = $cmisUrl
               | .cmisClientIDMT = $cmisClientIDMT
               | .cmisClientSecretMT = $cmisClientSecretMT
+              | .defaultRepositoryIDMT = $defaultRepositoryIDMT
+              | .defaultRepositoryID = $defaultRepositoryID
+              | .virusScanRepositoryID = $virusScanRepositoryID
               ' "$JSON_FILE" > "temp.json"
           )
           mv "temp.json" "$JSON_FILE"
@@ -745,7 +777,7 @@ jobs:
     timeout-minutes: 90
     needs: virusscan-repo-cleanup
     environment: dev
-    if: false   # Temporarily disabled — re-enable once btp login / SaaS subscribe issue is resolved
+    if: false # Temporarily disabled — re-enable once btp login / SaaS subscribe issue is resolved
     env:
       CF_API: ${{ secrets.CF_API }}
       CF_USER: ${{ secrets.CF_USER }}

@@ -1,4 +1,4 @@
-_schema-version: "3.1"
+_schema-version: '3.1'
 ID: sdmincidents
 description: Extend Upload Set to Fiori Elements and utilize Document Management Service
 version: 1.0.0
@@ -18,10 +18,11 @@ modules:
     parameters:
       buildpack: nodejs_buildpack
     properties:
-        REPOSITORY_ID: ${REPOSITORY_ID}
-        INCOMING_REQUEST_TIMEOUT: 3600000
-        INCOMING_SESSION_TIMEOUT: 3600000
-        INCOMING_CONNECTION_TIMEOUT: 3600000
+      REPOSITORY_ID: ${REPOSITORY_ID}
+      CDS_LOG_LEVELS_SDM: info
+      INCOMING_REQUEST_TIMEOUT: 3600000
+      INCOMING_SESSION_TIMEOUT: 3600000
+      INCOMING_CONNECTION_TIMEOUT: 3600000
     build-parameters:
       builder: npm
   - name: incidents-db-deployer
@@ -31,6 +32,14 @@ modules:
       - name: sdi-hana
     parameters:
       buildpack: nodejs_buildpack
+    properties:
+      # Remove orphaned HDI artifacts on redeploy (e.g. the per-locale
+      # ScanStates_texts import files that @cap-js/attachments 3.12.x shipped and
+      # 3.13.x consolidated). Without this, stale importers collide with the new
+      # ones and HDI make fails with "include_filter ... not disjunct".
+      # HDI_DEPLOY_OPTIONS takes a JSON object; the CLI flag --auto-undeploy maps
+      # to the key auto_undeploy.
+      HDI_DEPLOY_OPTIONS: '{"auto_undeploy":true}'
   - name: incidents-destination-content
     type: com.sap.application.content
     requires:
@@ -100,7 +109,7 @@ modules:
     path: app/router
     build-parameters:
       ignore:
-        - "default-env.json"
+        - 'default-env.json'
     parameters:
       keep-existing-routes: true
       disk-quota: 256M
@@ -136,7 +145,7 @@ resources:
     parameters:
       config:
         tenant-mode: dedicated
-        xsappname: sdmincidents
+        xsappname: sdmincidents-${org}-${space}
         oauth2-configuration:
           redirect-uris:
             - ~{app-api/app-url}/**

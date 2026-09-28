@@ -1,4 +1,4 @@
-_schema-version: "3.1"
+_schema-version: '3.1'
 ID: capire.incidents.mtx
 description: A simple CAP project.
 version: 0.0.3
@@ -12,6 +12,7 @@ modules:
       readiness-health-check-http-endpoint: /health
     properties:
       REPOSITORY_ID: REPLACE_WITH_YOUR_REPOSITORY_ID
+      CDS_LOG_LEVELS_SDM: info
       INCOMING_REQUEST_TIMEOUT: 3600000
       INCOMING_SESSION_TIMEOUT: 3600000
       INCOMING_CONNECTION_TIMEOUT: 3600000
@@ -42,6 +43,15 @@ modules:
           # but let's give it a try here
           # https://cap.cloud.sap/docs/guides/multitenancy/#update-database-schema-for-tenants
           command: cds-mtx upgrade '*'
+    properties:
+      DATABASE_ID: REPLACE_WITH_YOUR_DATABASE_ID
+      # Remove orphaned HDI artifacts during per-tenant `cds-mtx upgrade` (e.g. the
+      # per-locale ScanStates_texts import files that @cap-js/attachments 3.12.x
+      # shipped and 3.13.x consolidated). The mtx sidecar reads HDI_DEPLOY_OPTIONS
+      # at runtime (JSON.parse) and merges it into each tenant's HDI deploy.
+      # Without this, stale importers collide and HDI make fails with
+      # "include_filter ... not disjunct".
+      HDI_DEPLOY_OPTIONS: '{"auto_undeploy":true}'
     provides:
       - name: mtx-api
         properties:
@@ -134,8 +144,8 @@ modules:
     path: app/router
     build-parameters:
       ignore:
-        - "default-env.json"
-        - "* copy.*"
+        - 'default-env.json'
+        - '* copy.*'
     parameters:
       keep-existing-routes: true
       disk-quota: 256M
@@ -146,7 +156,7 @@ modules:
         - route: sdm-dev-consumer-eu12-6uxoiqfk-${default-uri}
         - route: sdmgoogleworkspace-cpok9mi1-${default-uri}
     properties:
-      TENANT_HOST_PATTERN: "^(.*)-${default-uri}"
+      TENANT_HOST_PATTERN: '^(.*)-${default-uri}'
       SESSION_TIMEOUT: 60
       INCOMING_REQUEST_TIMEOUT: 3600000
       INCOMING_SESSION_TIMEOUT: 3600000
@@ -159,6 +169,7 @@ modules:
           name: incidents-mtx-srv # must be used in xs-app.json as well
           url: ~{srv-url}
           forwardAuthToken: true
+          timeout: 3600000
       - name: mtx-api
         group: destinations
         properties:
@@ -185,7 +196,7 @@ resources:
         xsappname: incidents-mtx-${org}-${space}-multitenancytest
         appName: incidents-mtx-${org}-${space}-multitenancytest
         displayName: Node js MTX Application ${space}
-        description: MTX Application deployed using job 
+        description: MTX Application deployed using job
         category: Category
         appUrls:
           getDependencies: ~{mtx-api/mtx-url}/-/cds/saas-provisioning/dependencies
@@ -264,4 +275,3 @@ build-parameters:
       commands:
         - npm ci
         - npx cds build --production
-
